@@ -197,7 +197,8 @@ class DataSet:
 
     def get_prob_func_inputs(self, ids):
         order = ['query_tokens', 'tgt_action_seq', 'tgt_action_seq_type',
-                 'tgt_node_seq', 'tgt_par_rule_seq', 'tgt_par_t_seq']
+                 'tgt_node_seq', 'tgt_par_rule_seq', 'tgt_par_t_seq','lay_action_seq',
+                 'lay_par_t_seq','lay_par_rule_seq','lay_node_seq','lay_action_seq_index']
 
         max_src_seq_len = max(len(self.examples[i].query) for i in ids)
         max_tgt_seq_len = max(len(self.examples[i].actions) for i in ids)
@@ -224,9 +225,18 @@ class DataSet:
         # np.max([len(e.rules) for e in self.examples])
 
         query_tokens = self.data_matrix['query_tokens'] = np.zeros((self.count, max_query_length), dtype='int32')
+
         tgt_node_seq = self.data_matrix['tgt_node_seq'] = np.zeros((self.count, max_example_action_num), dtype='int32')
         tgt_par_rule_seq = self.data_matrix['tgt_par_rule_seq'] = np.zeros((self.count, max_example_action_num), dtype='int32')
         tgt_par_t_seq = self.data_matrix['tgt_par_t_seq'] = np.zeros((self.count, max_example_action_num), dtype='int32')
+
+        lay_node_seq = self.data_matrix['lay_node_seq'] = np.zeros((self.count, max_example_action_num), dtype='int32')
+        lay_par_rule_seq = self.data_matrix['lay_par_rule_seq'] = np.zeros((self.count, max_example_action_num), dtype='int32')
+        lay_par_t_seq = self.data_matrix['lay_par_t_seq'] = np.zeros((self.count, max_example_action_num), dtype='int32')
+        lay_action_seq = self.data_matrix['lay_action_seq'] = np.zeros((self.count, max_example_action_num), dtype='int32')
+        lay_action_seq_index=self.data_matrix['lay_action_seq_index']=np.zeros((self.count,max_example_action_num),dtype='int32')
+        
+
         tgt_action_seq = self.data_matrix['tgt_action_seq'] = np.zeros((self.count, max_example_action_num, 3), dtype='int32')
         tgt_action_seq_type = self.data_matrix['tgt_action_seq_type'] = np.zeros((self.count, max_example_action_num, 3), dtype='int32')
 
@@ -240,27 +250,42 @@ class DataSet:
                 query_tokens[eid, tid] = token_id
 
             assert len(exg_action_seq) > 0
-
+            k=0
             for t, action in enumerate(exg_action_seq):
                 if action.act_type == APPLY_RULE:
+                    lay_action_seq_index[eid,t]=k
+                    k=k+1
                     rule = action.data['rule']
+                    parent_rule = action.data['parent_rule']
                     tgt_action_seq[eid, t, 0] = self.grammar.rule_to_id[rule]
                     tgt_action_seq_type[eid, t, 0] = 1
+                    lay_action_seq[eid,t]=self.grammar.rule_to_id[rule]
+                    lay_node_seq[eid, t] = self.grammar.get_node_type_id(rule.parent)
+                    if parent_rule:
+                        lay_par_rule_seq[eid, t] = self.grammar.rule_to_id[parent_rule]
+                    else:
+                        assert t == 0
+                        lay_par_rule_seq[eid, t] = -1
+                    parent_t = action.data['parent_t']
+                    lay_par_t_seq[eid, t] = parent_t
+
                 elif action.act_type == GEN_TOKEN:
+                    lay_action_seq_index[eid,t]=0
                     token = action.data['literal']
                     token_id = terminal_vocab[token]
                     tgt_action_seq[eid, t, 1] = token_id
                     tgt_action_seq_type[eid, t, 1] = 1
                 elif action.act_type == COPY_TOKEN:
+                    lay_action_seq_index[eid,t]=0
                     src_token_idx = action.data['source_idx']
                     tgt_action_seq[eid, t, 2] = src_token_idx
                     tgt_action_seq_type[eid, t, 2] = 1
                 elif action.act_type == GEN_COPY_TOKEN:
+                    lay_action_seq_index[eid,t]=0
                     token = action.data['literal']
                     token_id = terminal_vocab[token]
                     tgt_action_seq[eid, t, 1] = token_id
                     tgt_action_seq_type[eid, t, 1] = 1
-
                     src_token_idx = action.data['source_idx']
                     tgt_action_seq[eid, t, 2] = src_token_idx
                     tgt_action_seq_type[eid, t, 2] = 1
