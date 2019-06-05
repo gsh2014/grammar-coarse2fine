@@ -33,7 +33,7 @@ class Model:
         # self.node_embedding = Embedding(config.node_num, config.node_embed_dim, name='node_embed')
 
         self.query_embedding = Embedding(config.source_vocab_size, config.word_embed_dim, name='query_embed')
-
+           #encoder for lay
         if config.encoder == 'bilstm':
             self.query_encoder_lstm = BiLSTM(config.word_embed_dim, config.encoder_hidden_dim / 2,
                                              return_sequences=True,
@@ -41,6 +41,14 @@ class Model:
         else:
             self.query_encoder_lstm = LSTM(config.word_embed_dim, config.encoder_hidden_dim, return_sequences=True,
                                             name='query_encoder_lstm')
+            #add encoder for target
+        if config.encoder == 'bilstm':
+            self.tgt_query_encoder_lstm = BiLSTM(config.word_embed_dim, config.encoder_hidden_dim / 2,
+                                             return_sequences=True,
+                                             name='tgt_query_encoder_lstm')
+        else:
+            self.tgt_query_encoder_lstm = LSTM(config.word_embed_dim, config.encoder_hidden_dim, return_sequences=True,
+                                            name='tgt_query_encoder_lstm')
 
         if config.encoder == 'bilstm':
             self.lay_encoder_lstm = BiLSTM(config.rule_embed_dim, config.rule_embed_dim / 2, return_sequences=True,
@@ -101,6 +109,7 @@ class Model:
 
         # self.rule_encoder_lstm.params
         self.params = self.query_embedding.params + self.query_encoder_lstm.params + self.lay_encoder_lstm.params + self.lay_decoder_lstm.params + \
+                    self.tgt_query_encoder_lstm.params + \
                       self.decoder_lstm.params + self.src_ptr_net.params + self.terminal_gen_softmax.params + \
                       [self.rule_embedding_W, self.rule_embedding_b, self.node_embedding, self.vocab_embedding_W,
                        self.vocab_embedding_b,self.lay_encoder_rule_embedding_W,self.lay_encoder_rule_embedding_b,
@@ -196,6 +205,9 @@ class Model:
         query_embed = self.query_encoder_lstm(query_token_embed, mask=query_token_embed_mask,
                                               dropout=config.dropout, srng=self.srng)
 
+        tgt_query_embed= self.tgt_query_encoder_lstm(query_token_embed, mask=query_token_embed_mask,
+                                              dropout=config.dropout, srng=self.srng)
+
         lay_embed = self.lay_encoder_lstm(lay_encoder_action_seq_embed,mask=lay_action_seq_mask, dropout=config.dropout, srng=self.srng)
 
         def fn(lay_embed, lay_action_seq_index):
@@ -218,7 +230,7 @@ class Model:
         # decoder_hidden_states: (batch_size, max_example_action_num, lstm_hidden_state)
         # ctx_vectors: (batch_size, max_example_action_num, encoder_hidden_dim)
         decoder_hidden_states, _, ctx_vectors = self.decoder_lstm(decoder_input,
-                                                                  context=query_embed,
+                                                                  context=tgt_query_embed,
                                                                   context_mask=query_token_embed_mask,
                                                                   mask=tgt_action_seq_mask,
                                                                   parent_t_seq=tgt_par_t_seq,
@@ -369,6 +381,8 @@ class Model:
 
         query_embed = self.query_encoder_lstm(query_token_embed, mask=query_token_embed_mask,
                                               dropout=config.dropout, train=False)
+        tgt_query_embed = self.tgt_query_encoder_lstm(query_token_embed, mask=query_token_embed_mask,
+                                              dropout=config.dropout, train=False)
 
         lay_embed = self.lay_encoder_lstm(lay_action_seq_embed, mask=lay_action_seq_mask, dropout=config.dropout,
                                           train=False)
@@ -414,7 +428,7 @@ class Model:
                                                                                          init_state=decoder_prev_state,
                                                                                          init_cell=decoder_prev_cell,
                                                                                          hist_h=hist_h,
-                                                                                         context=query_embed,
+                                                                                         context=tgt_query_embed,
                                                                                          context_mask=query_token_embed_mask,
                                                                                          parent_t_seq=parent_t_reshaped,
                                                                                          dropout=config.dropout,
@@ -448,7 +462,7 @@ class Model:
 
         ptr_net_decoder_state = T.concatenate([decoder_next_state_dim3, ctx_vectors], axis=-1)
 
-        copy_prob = self.src_ptr_net(query_embed, query_token_embed_mask, ptr_net_decoder_state)
+        copy_prob = self.src_ptr_net(tgt_query_embed, query_token_embed_mask, ptr_net_decoder_state)
 
         copy_prob = copy_prob.flatten(2)
 
@@ -457,9 +471,15 @@ class Model:
 
         self.decoder_func_init = theano.function(inputs, outputs)
 
+        inputs = [query_tokens]
+        outputs = [tgt_query_embed, query_token_embed_mask]
+
+        self.tgt_decoder_func_init=theano.function(inputs, outputs)
+
+
         inputs = [time_steps, decoder_prev_state, decoder_prev_cell, hist_h, prev_action_embed,
                   node_id, par_rule_id, parent_t,
-                  query_embed, query_token_embed_mask]
+                  tgt_query_embed, query_token_embed_mask]
 
         outputs = [decoder_next_state, decoder_next_cell,
                    rule_prob, gen_action_prob, vocab_prob, copy_prob]
@@ -486,6 +506,7 @@ class Model:
         query_tokens = example.data[0]
 
         query_embed, query_token_embed_mask = self.decoder_func_init(query_tokens)
+        tgt_query_embed, tgt_query_token_embed_mask = self.tgt_decoder_func_init(query_tokens)
 
         lay_hyp = Hyp(grammar)
         lay_hyp.state = np.zeros(config.decoder_hidden_dim).astype('float32')
@@ -624,12 +645,12 @@ class Model:
             node_id = np.array([hyp.node_id for hyp in hyp_samples], dtype='int32')
             parent_rule_id = np.array([hyp.parent_rule_id for hyp in hyp_samples], dtype='int32')
             parent_t = np.array([hyp.get_action_parent_t() for hyp in hyp_samples], dtype='int32')
-            query_embed_tiled = np.tile(query_embed, [live_hyp_num, 1, 1])
-            query_token_embed_mask_tiled = np.tile(query_token_embed_mask, [live_hyp_num, 1])
+            tgt_query_embed_tiled = np.tile(tgt_query_embed, [live_hyp_num, 1, 1])
+            tgt_query_token_embed_mask_tiled = np.tile(tgt_query_token_embed_mask, [live_hyp_num, 1])
 
             inputs = [np.array([t], dtype='int32'), decoder_prev_state, decoder_prev_cell, hist_h, prev_action_embed,
                       node_id, parent_rule_id, parent_t,
-                      query_embed_tiled, query_token_embed_mask_tiled]
+                      tgt_query_embed_tiled, tgt_query_token_embed_mask_tiled]
 
             decoder_next_state, decoder_next_cell, \
             rule_prob, gen_action_prob, vocab_prob, copy_prob = self.decoder_func_next_step(*inputs)
