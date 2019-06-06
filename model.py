@@ -42,19 +42,19 @@ class Model:
             self.query_encoder_lstm = LSTM(config.word_embed_dim, config.encoder_hidden_dim, return_sequences=True,
                                             name='query_encoder_lstm')
             #add encoder for target
-        if config.encoder == 'bilstm':
-            self.tgt_query_encoder_lstm = BiLSTM(config.word_embed_dim, config.encoder_hidden_dim / 2,
-                                             return_sequences=True,
-                                             name='tgt_query_encoder_lstm')
-        else:
-            self.tgt_query_encoder_lstm = LSTM(config.word_embed_dim, config.encoder_hidden_dim, return_sequences=True,
-                                            name='tgt_query_encoder_lstm')
+        # if config.encoder == 'bilstm':
+        #     self.tgt_query_encoder_lstm = BiLSTM(config.word_embed_dim, config.encoder_hidden_dim / 2,
+        #                                      return_sequences=True,
+        #                                      name='tgt_query_encoder_lstm')
+        # else:
+        #     self.tgt_query_encoder_lstm = LSTM(config.word_embed_dim, config.encoder_hidden_dim, return_sequences=True,
+        #                                     name='tgt_query_encoder_lstm')
 
         if config.encoder == 'bilstm':
-            self.lay_encoder_lstm = BiLSTM(config.rule_embed_dim, config.rule_embed_dim / 2, return_sequences=True,
+            self.lay_encoder_lstm = BiLSTM(config.rule_embed_dim, config.encoder_hidden_dim / 2, return_sequences=True,
                                            name='lay_encoder_lstm')
         else:
-            self.lay_encoder_lstm = LSTM(config.rule_embed_dim, config.rule_embed_dim, return_sequences=True,
+            self.lay_encoder_lstm = LSTM(config.rule_embed_dim, config.encoder_hidden_dim, return_sequences=True,
                                          name='lay_encoder_lstm')
 
         self.decoder_lstm = CondAttLSTM(config.rule_embed_dim + config.node_embed_dim + config.rule_embed_dim,
@@ -109,7 +109,6 @@ class Model:
 
         # self.rule_encoder_lstm.params
         self.params = self.query_embedding.params + self.query_encoder_lstm.params + self.lay_encoder_lstm.params + self.lay_decoder_lstm.params + \
-                    self.tgt_query_encoder_lstm.params + \
                       self.decoder_lstm.params + self.src_ptr_net.params + self.terminal_gen_softmax.params + \
                       [self.rule_embedding_W, self.rule_embedding_b, self.node_embedding, self.vocab_embedding_W,
                        self.vocab_embedding_b,self.lay_encoder_rule_embedding_W,self.lay_encoder_rule_embedding_b,
@@ -205,24 +204,24 @@ class Model:
         query_embed = self.query_encoder_lstm(query_token_embed, mask=query_token_embed_mask,
                                               dropout=config.dropout, srng=self.srng)
 
-        tgt_query_embed= self.tgt_query_encoder_lstm(query_token_embed, mask=query_token_embed_mask,
-                                              dropout=config.dropout, srng=self.srng)
+        # tgt_query_embed = self.tgt_query_encoder_lstm(query_token_embed, mask=query_token_embed_mask,
+        #                                       dropout=config.dropout, srng=self.srng)
 
         lay_embed = self.lay_encoder_lstm(lay_encoder_action_seq_embed,mask=lay_action_seq_mask, dropout=config.dropout, srng=self.srng)
 
-        def fn(lay_embed, lay_action_seq_index):
-            return lay_embed[lay_action_seq_index]
+        # def fn(lay_embed, lay_action_seq_index):
+        #     return lay_embed[lay_action_seq_index]
+        #
+        # result, updates = theano.scan(fn=fn,
+        #                               outputs_info=None,
+        #                               sequences=[lay_embed, lay_action_seq_index]
+        #                               )
+        #
+        # part_decoder_input = T.switch(T.shape_padright(tgt_action_seq[:, :, 0] > 0),
+        #                               result,  # a problem left
+        #                               self.vocab_embedding_W[tgt_action_seq[:, :, 1]])
 
-        result, updates = theano.scan(fn=fn,
-                                      outputs_info=None,
-                                      sequences=[lay_embed, lay_action_seq_index]
-                                      )
-
-        part_decoder_input = T.switch(T.shape_padright(tgt_action_seq[:, :, 0] > 0),
-                                      result,  # a problem left
-                                      self.vocab_embedding_W[tgt_action_seq[:, :, 1]])
-
-        decoder_input = T.concatenate([part_decoder_input, tgt_node_embed, tgt_par_rule_embed], axis=-1)
+        decoder_input = T.concatenate([tgt_action_seq_embed_tm1, tgt_node_embed, tgt_par_rule_embed], axis=-1)
 
         # (batch_size, max_example_action_num)
         tgt_action_seq_mask = T.any(tgt_action_seq_type, axis=-1)
@@ -230,8 +229,8 @@ class Model:
         # decoder_hidden_states: (batch_size, max_example_action_num, lstm_hidden_state)
         # ctx_vectors: (batch_size, max_example_action_num, encoder_hidden_dim)
         decoder_hidden_states, _, ctx_vectors = self.decoder_lstm(decoder_input,
-                                                                  context=tgt_query_embed,
-                                                                  context_mask=query_token_embed_mask,
+                                                                  context=lay_embed,
+                                                                  context_mask=lay_action_seq_mask,
                                                                   mask=tgt_action_seq_mask,
                                                                   parent_t_seq=tgt_par_t_seq,
                                                                   dropout=config.dropout,
@@ -317,7 +316,7 @@ class Model:
         train_inputs = [query_tokens, tgt_action_seq, tgt_action_seq_type,
                         tgt_node_seq, tgt_par_rule_seq, tgt_par_t_seq,
                         lay_action_seq, lay_par_t_seq, lay_par_rule_seq,
-                        lay_node_seq, lay_action_seq_index]
+                        lay_node_seq]
         optimizer = optimizers.get(config.optimizer)
         optimizer.clip_grad = config.clip_grad
         updates, grads = optimizer.get_updates(self.params, final_loss)
@@ -381,8 +380,8 @@ class Model:
 
         query_embed = self.query_encoder_lstm(query_token_embed, mask=query_token_embed_mask,
                                               dropout=config.dropout, train=False)
-        tgt_query_embed = self.tgt_query_encoder_lstm(query_token_embed, mask=query_token_embed_mask,
-                                              dropout=config.dropout, train=False)
+        # tgt_query_embed = self.tgt_query_encoder_lstm(query_token_embed, mask=query_token_embed_mask,
+        #                                       dropout=config.dropout, train=False)
 
         lay_embed = self.lay_encoder_lstm(lay_action_seq_embed, mask=lay_action_seq_mask, dropout=config.dropout,
                                           train=False)
@@ -428,8 +427,8 @@ class Model:
                                                                                          init_state=decoder_prev_state,
                                                                                          init_cell=decoder_prev_cell,
                                                                                          hist_h=hist_h,
-                                                                                         context=tgt_query_embed,
-                                                                                         context_mask=query_token_embed_mask,
+                                                                                         context=lay_embed,
+                                                                                         context_mask=lay_action_seq_mask,
                                                                                          parent_t_seq=parent_t_reshaped,
                                                                                          dropout=config.dropout,
                                                                                          train=False,
@@ -462,7 +461,7 @@ class Model:
 
         ptr_net_decoder_state = T.concatenate([decoder_next_state_dim3, ctx_vectors], axis=-1)
 
-        copy_prob = self.src_ptr_net(tgt_query_embed, query_token_embed_mask, ptr_net_decoder_state)
+        copy_prob = self.src_ptr_net(query_embed, query_token_embed_mask, ptr_net_decoder_state)
 
         copy_prob = copy_prob.flatten(2)
 
@@ -471,15 +470,15 @@ class Model:
 
         self.decoder_func_init = theano.function(inputs, outputs)
 
-        inputs = [query_tokens]
-        outputs = [tgt_query_embed, query_token_embed_mask]
+        inputs = [lay_action_seq]
+        outputs = [lay_embed, lay_action_seq_mask]
 
         self.tgt_decoder_func_init=theano.function(inputs, outputs)
 
 
         inputs = [time_steps, decoder_prev_state, decoder_prev_cell, hist_h, prev_action_embed,
                   node_id, par_rule_id, parent_t,
-                  tgt_query_embed, query_token_embed_mask]
+                  lay_embed, lay_action_seq_mask,query_embed,query_token_embed_mask]
 
         outputs = [decoder_next_state, decoder_next_cell,
                    rule_prob, gen_action_prob, vocab_prob, copy_prob]
@@ -504,9 +503,9 @@ class Model:
         lay_rule_embedding = self.lay_decoder_rule_embedding_W.get_value(borrow=True)
 
         query_tokens = example.data[0]
-
+        lay_action_seq = np.zeros((1, max_time_step), dtype='int32')   #max_time_step ?
         query_embed, query_token_embed_mask = self.decoder_func_init(query_tokens)
-        tgt_query_embed, tgt_query_token_embed_mask = self.tgt_decoder_func_init(query_tokens)
+        #tgt_query_embed, tgt_query_token_embed_mask = self.tgt_decoder_func_init(query_tokens)
 
         lay_hyp = Hyp(grammar)
         lay_hyp.state = np.zeros(config.decoder_hidden_dim).astype('float32')
@@ -544,88 +543,92 @@ class Model:
             else:
                 token_set.add(tid)
 
-        # for t in xrange(max_time_step):
-        #     decoder_prev_state = np.array([lay_hyp.state]).astype('float32')
-        #     decoder_prev_cell = np.array([lay_hyp.cell]).astype('float32')
-        #
-        #     hist_h = np.zeros((1, max_time_step, config.decoder_hidden_dim)).astype('float32')
-        #
-        #     if t > 0:
-        #         hist_h[0, :len(lay_hyp.hist_h), :] = lay_hyp.hist_h
-        #
-        #     prev_action_embed = np.array([lay_hyp.action_embed]).astype('float32')
-        #     node_id = np.array([lay_hyp.node_id], dtype='int32')
-        #     parent_rule_id = np.array([lay_hyp.parent_rule_id], dtype='int32')
-        #     parent_t = np.array([lay_hyp.get_action_parent_t()], dtype='int32')
-        #     query_embed_tiled = np.tile(query_embed, [lay_live_hyp_num, 1, 1])
-        #     query_token_embed_mask_tiled = np.tile(query_token_embed_mask, [lay_live_hyp_num, 1])
-        #
-        #     inputs = [np.array([t], dtype='int32'), decoder_prev_state, decoder_prev_cell, hist_h, prev_action_embed,
-        #               node_id, parent_rule_id, parent_t,
-        #               query_embed_tiled, query_token_embed_mask_tiled]
-        #
-        #     decoder_next_state, decoder_next_cell, \
-        #     rule_prob = self.lay_decoder_func_next_step(*inputs)
-        #
-        #     rule_apply_cand_hyp_ids = []
-        #     rule_apply_cand_scores = []
-        #     rule_apply_cand_rules = []
-        #     rule_apply_cand_rule_ids = []
-        #
-        #     lay_hyp_frontier_nts = []
-        #
-        #     for k in xrange(lay_live_hyp_num):
-        #         frontier_nt = lay_hyp.frontier_nt()
-        #         lay_hyp_frontier_nts.append(frontier_nt)
-        #
-        #         assert lay_hyp, 'none hyp!'
-        #
-        #         if not grammar.is_value_node(frontier_nt):
-        #             rules = grammar[frontier_nt.as_type_node] if config.head_nt_constraint else grammar
-        #             assert len(rules) > 0, 'fail to expand nt node %s' % frontier_nt
-        #             for rule in rules:
-        #                 rule_id = grammar.rule_to_id[rule]
-        #
-        #                 cur_rule_score = np.log(rule_prob[k, rule_id])
-        #                 new_hyp_score = lay_hyp.score + cur_rule_score
-        #
-        #                 rule_apply_cand_hyp_ids.append(k)
-        #                 rule_apply_cand_scores.append(new_hyp_score)
-        #                 rule_apply_cand_rules.append(rule)
-        #                 rule_apply_cand_rule_ids.append(rule_id)
-        #
-        #     rule_apply_cand_num = len(rule_apply_cand_scores)
-        #
-        #     cand_scores = np.array(rule_apply_cand_scores)
-        #
-        #     top_cand_ids = (-cand_scores).argsort()[:1]
-        #
-        #     for cand_id in top_cand_ids:
-        #         new_hyp = None
-        #
-        #         rule_id = rule_apply_cand_rule_ids[cand_id]
-        #         rule = rule_apply_cand_rules[cand_id]
-        #         new_hyp_score = rule_apply_cand_scores[cand_id]
-        #
-        #         new_hyp = Hyp(lay_hyp)
-        #         new_hyp.apply_rule(rule)
-        #
-        #         new_hyp.score = new_hyp_score
-        #         new_hyp.state = copy.copy(decoder_next_state[0])
-        #         new_hyp.hist_h.append(copy.copy(new_hyp.state))
-        #         new_hyp.cell = copy.copy(decoder_next_cell[0])
-        #         new_hyp.action_embed = lay_rule_embedding[rule_id]
-        #
-        #     new_frontier_nt = new_hyp.frontier_nt()
-        #
-        #     if new_frontier_nt is None:
-        #         new_hyp.n_timestep = t + 1
-        #         break
-        #
-        #     else:
-        #         new_hyp.node_id = grammar.get_node_type_id(new_frontier_nt.type)
-        #         new_hyp.parent_rule_id = grammar.rule_to_id[new_frontier_nt.parent.applied_rule]
-        #     lay_hyp = new_hyp
+        for t in xrange(max_time_step):
+            decoder_prev_state = np.array([lay_hyp.state]).astype('float32')
+            decoder_prev_cell = np.array([lay_hyp.cell]).astype('float32')
+
+            hist_h = np.zeros((1, max_time_step, config.decoder_hidden_dim)).astype('float32')
+
+            if t > 0:
+                hist_h[0, :len(lay_hyp.hist_h), :] = lay_hyp.hist_h
+
+            prev_action_embed = np.array([lay_hyp.action_embed]).astype('float32')
+            node_id = np.array([lay_hyp.node_id], dtype='int32')
+            parent_rule_id = np.array([lay_hyp.parent_rule_id], dtype='int32')
+            parent_t = np.array([lay_hyp.get_action_parent_t()], dtype='int32')
+            query_embed_tiled = np.tile(query_embed, [lay_live_hyp_num, 1, 1])
+            query_token_embed_mask_tiled = np.tile(query_token_embed_mask, [lay_live_hyp_num, 1])
+
+            inputs = [np.array([t], dtype='int32'), decoder_prev_state, decoder_prev_cell, hist_h, prev_action_embed,
+                      node_id, parent_rule_id, parent_t,
+                      query_embed_tiled, query_token_embed_mask_tiled]
+
+            decoder_next_state, decoder_next_cell, \
+            rule_prob = self.lay_decoder_func_next_step(*inputs)
+
+            rule_apply_cand_hyp_ids = []
+            rule_apply_cand_scores = []
+            rule_apply_cand_rules = []
+            rule_apply_cand_rule_ids = []
+
+            lay_hyp_frontier_nts = []
+
+            for k in xrange(lay_live_hyp_num):
+                frontier_nt = lay_hyp.frontier_nt()
+                lay_hyp_frontier_nts.append(frontier_nt)
+
+                assert lay_hyp, 'none hyp!'
+
+                if not grammar.is_value_node(frontier_nt):
+                    rules = grammar[frontier_nt.as_type_node] if config.head_nt_constraint else grammar
+                    assert len(rules) > 0, 'fail to expand nt node %s' % frontier_nt
+                    for rule in rules:
+                        rule_id = grammar.rule_to_id[rule]
+
+                        cur_rule_score = np.log(rule_prob[k, rule_id])
+                        new_hyp_score = lay_hyp.score + cur_rule_score
+
+                        rule_apply_cand_hyp_ids.append(k)
+                        rule_apply_cand_scores.append(new_hyp_score)
+                        rule_apply_cand_rules.append(rule)
+                        rule_apply_cand_rule_ids.append(rule_id)
+
+            rule_apply_cand_num = len(rule_apply_cand_scores)
+
+            cand_scores = np.array(rule_apply_cand_scores)
+
+            top_cand_ids = (-cand_scores).argsort()[:1]
+
+            for cand_id in top_cand_ids:
+                new_hyp = None
+
+                rule_id = rule_apply_cand_rule_ids[cand_id]
+                lay_action_seq[0, t] = rule_id   #
+                rule = rule_apply_cand_rules[cand_id]
+                new_hyp_score = rule_apply_cand_scores[cand_id]
+
+                new_hyp = Hyp(lay_hyp)
+                new_hyp.apply_rule(rule)
+
+                new_hyp.score = new_hyp_score
+                new_hyp.state = copy.copy(decoder_next_state[0])
+                new_hyp.hist_h.append(copy.copy(new_hyp.state))
+                new_hyp.cell = copy.copy(decoder_next_cell[0])
+                new_hyp.action_embed = lay_rule_embedding[rule_id]
+
+            new_frontier_nt = new_hyp.frontier_nt()
+
+            if new_frontier_nt is None:
+                new_hyp.n_timestep = t + 1
+                lay_hyp=new_hyp
+                break
+
+            else:
+                new_hyp.node_id = grammar.get_node_type_id(new_frontier_nt.type)
+                new_hyp.parent_rule_id = grammar.rule_to_id[new_frontier_nt.parent.applied_rule]
+            lay_hyp = new_hyp
+
+        lay_embed, lay_action_seq_mask = self.tgt_decoder_func_init(lay_action_seq)
 
         for t in xrange(max_time_step):
             hyp_num = len(hyp_samples)
@@ -645,12 +648,13 @@ class Model:
             node_id = np.array([hyp.node_id for hyp in hyp_samples], dtype='int32')
             parent_rule_id = np.array([hyp.parent_rule_id for hyp in hyp_samples], dtype='int32')
             parent_t = np.array([hyp.get_action_parent_t() for hyp in hyp_samples], dtype='int32')
-            tgt_query_embed_tiled = np.tile(tgt_query_embed, [live_hyp_num, 1, 1])
-            tgt_query_token_embed_mask_tiled = np.tile(tgt_query_token_embed_mask, [live_hyp_num, 1])
-
+            lay_embed_tiled = np.tile(lay_embed, [live_hyp_num, 1, 1])
+            lay_action_seq_mask_tiled = np.tile(lay_action_seq_mask, [live_hyp_num, 1])
+            query_embed_tiled = np.tile(query_embed, [lay_live_hyp_num, 1, 1])
+            query_token_embed_mask_tiled = np.tile(query_token_embed_mask, [lay_live_hyp_num, 1])
             inputs = [np.array([t], dtype='int32'), decoder_prev_state, decoder_prev_cell, hist_h, prev_action_embed,
                       node_id, parent_rule_id, parent_t,
-                      tgt_query_embed_tiled, tgt_query_token_embed_mask_tiled]
+                      lay_embed_tiled, lay_action_seq_mask_tiled,query_embed_tiled,query_token_embed_mask_tiled]
 
             decoder_next_state, decoder_next_cell, \
             rule_prob, gen_action_prob, vocab_prob, copy_prob = self.decoder_func_next_step(*inputs)
